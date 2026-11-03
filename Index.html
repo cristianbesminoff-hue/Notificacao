@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapa de Pontos</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,sans-serif}
+  #map{position:absolute;inset:0}
+  #panel{position:absolute;z-index:1000;left:0;right:0;bottom:0;background:#fff;
+    border-radius:14px 14px 0 0;box-shadow:0 -2px 12px rgba(0,0,0,.3);padding:10px 12px;
+    max-width:560px;margin:0 auto}
+  #panel.min textarea,#panel.min .hint{display:none}
+  textarea{width:100%;box-sizing:border-box;height:90px;font-size:15px;padding:8px;border:1px solid #bbb;border-radius:8px}
+  .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center}
+  button{font-size:15px;padding:9px 12px;border:0;border-radius:8px;background:#1d6fe8;color:#fff}
+  button.sec{background:#e5e7eb;color:#111}
+  button.red{background:#d33}
+  .hint{font-size:12px;color:#555;margin:4px 0 0}
+  #msg{font-size:13px;color:#b00;margin-left:auto}
+  .pin{background:#e8501d;color:#fff;border:2px solid #fff;border-radius:50%;
+    width:30px;height:30px;line-height:26px;text-align:center;font-weight:700;font-size:13px;
+    box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .pop{text-align:center}
+  .pop .cod{font-size:28px;font-weight:700;letter-spacing:3px;margin:2px 0 8px}
+  .pop .btns{display:flex;gap:6px}
+  .pop button{background:#1a9b4b;flex:1}
+  .pop button.red{background:#d33}
+  .ok{font-size:22px;font-weight:700;color:#1a9b4b}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="panel">
+  <textarea id="txt" placeholder="Um ponto por linha:&#10;-3.7319, -38.5267, 123&#10;-3.7400, -38.5100, 456"></textarea>
+  <p class="hint">Formato: latitude, longitude, código de 3 dígitos. Pode colar vários de uma vez.</p>
+  <div class="row">
+    <button id="add">Adicionar</button>
+    <button class="sec" id="me">📍 Eu</button>
+    <button class="sec" id="fit">Ver todos</button>
+    <button class="sec" id="toggle">▼</button>
+    <span id="msg"></span>
+  </div>
+  <div class="row" style="margin-top:4px"><small id="count"></small></div>
+</div>
+
+<script>
+const KEY = 'mapa_pontos_v1';
+let state = { pts: [], next: 1 };
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.pts) state = s; } catch (e) {}
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+const map = L.map('map', { zoomControl: false }).setView([-14.2, -51.9], 4);
+L.control.zoom({ position: 'topright' }).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+const markers = {};           // id -> marker
+const route = L.polyline([], { color: '#1d6fe8', weight: 4, opacity: .8 }).addTo(map);
+
+function updateRoute(){
+  route.setLatLngs(state.pts.map(p => [p.lat, p.lng]));
+  document.getElementById('count').textContent =
+    state.pts.length + ' ponto(s) no mapa';
+}
+
+function makeMarker(p){
+  const icon = L.divIcon({ className: '', html: '<div class="pin">' + p.n + '</div>',
+    iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] });
+  const m = L.marker([p.lat, p.lng], { icon }).addTo(map);
+  const box = document.createElement('div');
+  box.className = 'pop';
+  box.innerHTML = '<div>Ponto ' + p.n + '</div><div class="cod">' + p.code + '</div>';
+  const b = document.createElement('button');
+  b.textContent = 'Executar';
+  b.onclick = () => {
+    box.innerHTML = '<div class="ok">OK ✔</div>';
+    setTimeout(() => executar(p.id), 700);
+  };
+  const d = document.createElement('button');
+  d.textContent = 'Excluir';
+  d.className = 'red';
+  d.onclick = () => { if (confirm('Excluir o ponto ' + p.n + '?')) executar(p.id); };
+  const btns = document.createElement('div');
+  btns.className = 'btns';
+  btns.appendChild(b); btns.appendChild(d);
+  box.appendChild(btns);
+  m.bindPopup(box);
+  markers[p.id] = m;
+}
+
+function executar(id){
+  if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; }
+  state.pts = state.pts.filter(p => p.id !== id);
+  save(); updateRoute();
+}
+
+function addPoints(text){
+  const msg = document.getElementById('msg'); msg.textContent = '';
+  let added = 0, bad = 0;
+  text.split(/\n+/).forEach(line => {
+    if (!line.trim()) return;
+    const m = line.match(/-?\d+(?:\.\d+)?/g);
+    if (!m || m.length < 3) { bad++; return; }
+    const lat = parseFloat(m[0]), lng = parseFloat(m[1]), code = m[2];
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || !/^\d{3}$/.test(code)) { bad++; return; }
+    const p = { id: Date.now() + '_' + state.next, n: state.next++, lat, lng, code };
+    state.pts.push(p); makeMarker(p); added++;
+  });
+  save(); updateRoute();
+  if (added) fitAll();
+  if (bad) msg.textContent = bad + ' linha(s) inválida(s)';
+  return added;
+}
+
+function fitAll(){
+  if (state.pts.length) map.fitBounds(state.pts.map(p => [p.lat, p.lng]), { padding: [50, 50], maxZoom: 16 });
+}
+
+// carregar salvos
+state.pts.forEach(makeMarker); updateRoute(); fitAll();
+
+// UI
+const txt = document.getElementById('txt');
+document.getElementById('add').onclick = () => { if (addPoints(txt.value)) txt.value = ''; };
+document.getElementById('fit').onclick = fitAll;
+const panel = document.getElementById('panel');
+document.getElementById('toggle').onclick = e => {
+  panel.classList.toggle('min');
+  e.target.textContent = panel.classList.contains('min') ? '▲' : '▼';
+};
+
+// Minha localização
+let meDot, meCircle, first = true, lastPos = null;
+map.on('locationfound', e => {
+  lastPos = e.latlng;
+  if (!meDot) {
+    meCircle = L.circle(e.latlng, { radius: e.accuracy, color: '#1d6fe8', weight: 1, fillOpacity: .12 }).addTo(map);
+    meDot = L.circleMarker(e.latlng, { radius: 8, color: '#fff', weight: 3, fillColor: '#1d6fe8', fillOpacity: 1 })
+      .addTo(map).bindTooltip('Você está aqui');
+  } else { meDot.setLatLng(e.latlng); meCircle.setLatLng(e.latlng).setRadius(e.accuracy); }
+  if (first && !state.pts.length) map.setView(e.latlng, 16);
+  first = false;
+});
+map.on('locationerror', () => { document.getElementById('msg').textContent = 'Sem permissão de GPS'; });
+map.locate({ watch: true, enableHighAccuracy: true });
+document.getElementById('me').onclick = () => { if (lastPos) map.setView(lastPos, 17); else map.locate({ watch: true, enableHighAccuracy: true }); };
+</script>
+</body>
+</html>
