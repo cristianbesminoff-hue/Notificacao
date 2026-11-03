@@ -35,7 +35,7 @@
 <div id="map"></div>
 
 <div id="panel">
-  <textarea id="txt" placeholder="Um ponto por linha:&#10;-3.7319, -38.5267, 123&#10;-3.7400, -38.5100, 456"></textarea>
+  <textarea id="txt" placeholder="Um ponto por linha:&#10;-30,1510278, -51,1494444, 123&#10;-30,1600000, -51,1500000, 456"></textarea>
   <p class="hint">Formato: latitude, longitude, código de 3 dígitos. Pode colar vários de uma vez.</p>
   <div class="row">
     <button id="add">Adicionar</button>
@@ -104,10 +104,11 @@ function addPoints(text){
   let added = 0, bad = 0;
   text.split(/\n+/).forEach(line => {
     if (!line.trim()) return;
-    const m = line.match(/-?\d+(?:\.\d+)?/g);
-    if (!m || m.length < 3) { bad++; return; }
-    const lat = parseFloat(m[0]), lng = parseFloat(m[1]), code = m[2];
-    if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || !/^\d{3}$/.test(code)) { bad++; return; }
+    const m = line.match(/-?\d+(?:[.,]\d+)?/g);
+    if (!m || m.length < 2) { bad++; return; }
+    const lat = parseFloat(m[0].replace(',', '.')), lng = parseFloat(m[1].replace(',', '.'));
+    const code = m[2] || '---';
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || (m[2] && !/^\d{3}$/.test(m[2]))) { bad++; return; }
     const p = { id: Date.now() + '_' + state.next, n: state.next++, lat, lng, code };
     state.pts.push(p); makeMarker(p); added++;
   });
