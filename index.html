@@ -41,6 +41,9 @@
     <button id="add">Adicionar</button>
     <button class="sec" id="me">📍 Eu</button>
     <button class="sec" id="fit">Ver todos</button>
+    <button class="sec" id="exp">⬇ Exportar</button>
+    <button class="sec" id="imp">⬆ Importar</button>
+    <input type="file" id="file" accept=".json,application/json" style="display:none">
     <button class="sec" id="toggle">▼</button>
     <span id="msg"></span>
   </div>
@@ -129,6 +132,41 @@ state.pts.forEach(makeMarker); updateRoute(); fitAll();
 const txt = document.getElementById('txt');
 document.getElementById('add').onclick = () => { if (addPoints(txt.value)) txt.value = ''; };
 document.getElementById('fit').onclick = fitAll;
+// Exportar / Importar
+document.getElementById('exp').onclick = () => {
+  const blob = new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pontos-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  document.getElementById('msg').textContent = '';
+};
+const fileIn = document.getElementById('file');
+document.getElementById('imp').onclick = () => fileIn.click();
+fileIn.onchange = () => {
+  const f = fileIn.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const msg = document.getElementById('msg');
+    try {
+      const data = JSON.parse(r.result);
+      if (!data || !Array.isArray(data.pts)) throw 0;
+      const have = new Set(state.pts.map(p => p.id));
+      let n = 0;
+      data.pts.forEach(p => {
+        if (!p || have.has(p.id) || typeof p.lat !== 'number' || typeof p.lng !== 'number') return;
+        state.pts.push(p); makeMarker(p); have.add(p.id); n++;
+      });
+      state.next = Math.max(state.next, data.next || 1, ...state.pts.map(p => p.n + 1));
+      save(); updateRoute(); fitAll();
+      msg.style.color = '#1a9b4b'; msg.textContent = n + ' ponto(s) importado(s)';
+    } catch (e) { msg.style.color = '#b00'; msg.textContent = 'Arquivo inválido'; }
+    fileIn.value = '';
+  };
+  r.readAsText(f);
+};
+
 const panel = document.getElementById('panel');
 document.getElementById('toggle').onclick = e => {
   panel.classList.toggle('min');
