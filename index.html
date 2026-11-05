@@ -31,6 +31,7 @@
   .pop .btns{display:flex;gap:6px}
   .pop button{background:#1a9b4b;flex:1}
   .pop button.red{background:#d33}
+  .pop button.cam{background:#1d6fe8;width:100%;margin-bottom:6px}
   .ok{font-size:22px;font-weight:700;color:#1a9b4b}
 </style>
 </head>
@@ -49,6 +50,8 @@
     <input type="file" id="file" style="display:none">
     <button id="kmlb">🗺 Importar do Google Maps</button>
     <input type="file" id="kml" style="display:none">
+    <button class="sec" id="expf">⬇ Fotos</button>
+    <input type="file" id="cam" accept="image/*" capture="environment" style="display:none">
     <button class="sec" id="toggle">▼</button>
     <span id="msg"></span>
   </div>
@@ -101,6 +104,11 @@ function makeMarker(p){
   const btns = document.createElement('div');
   btns.className = 'btns';
   btns.appendChild(b); btns.appendChild(d);
+  const cam = document.createElement('button');
+  cam.textContent = '📷 Foto';
+  cam.className = 'cam';
+  cam.onclick = () => { camPt = p; document.getElementById('cam').click(); };
+  box.appendChild(cam);
   box.appendChild(btns);
   m.bindPopup(box);
   markers[p.id] = m;
@@ -218,6 +226,113 @@ kmlIn.onchange = async () => {
   kmlIn.value = '';
 };
 
+// ===== Fotos =====
+let camPt = null;
+function db(){ return new Promise((ok, err) => {
+  const r = indexedDB.open('mapa_fotos', 1);
+  r.onupgradeneeded = () => r.result.createObjectStore('fotos', { keyPath: 'id', autoIncrement: true }).createIndex('pid', 'pid');
+  r.onsuccess = () => ok(r.result); r.onerror = () => err(r.error);
+}); }
+async function fotoAdd(rec){ const d = await db(); return new Promise((ok, err) => {
+  const t = d.transaction('fotos', 'readwrite'); t.objectStore('fotos').add(rec);
+  t.oncomplete = ok; t.onerror = () => err(t.error); }); }
+async function fotoCount(pid){ const d = await db(); return new Promise((ok, err) => {
+  const q = d.transaction('fotos').objectStore('fotos').index('pid').count(IDBKeyRange.only(pid));
+  q.onsuccess = () => ok(q.result); q.onerror = () => err(q.error); }); }
+async function fotosAll(){ const d = await db(); return new Promise((ok, err) => {
+  const q = d.transaction('fotos').objectStore('fotos').getAll();
+  q.onsuccess = () => ok(q.result); q.onerror = () => err(q.error); }); }
+async function fotosClear(){ const d = await db(); return new Promise((ok, err) => {
+  const t = d.transaction('fotos', 'readwrite'); t.objectStore('fotos').clear();
+  t.oncomplete = ok; t.onerror = () => err(t.error); }); }
+
+async function ruaDe(p){
+  if (p.rua) return p.rua;
+  try {
+    const c = new AbortController(), t = setTimeout(() => c.abort(), 5000);
+    const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=pt-BR&lat='
+      + p.lat + '&lon=' + p.lng, { signal: c.signal });
+    clearTimeout(t);
+    const a = (await r.json()).address || {};
+    const rua = a.road || a.pedestrian || a.residential || a.path || '';
+    if (rua) { const b = a.suburb || a.neighbourhood || ''; p.rua = b ? rua + ' - ' + b : rua; save(); }
+  } catch (e) {}
+  return p.rua || '';
+}
+
+async function carimbar(file, p){
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const W = Math.round(bmp.width * s), H = Math.round(bmp.height * s);
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const x = cv.getContext('2d'); x.drawImage(bmp, 0, 0, W, H);
+  const gps = lastPos ? { lat: lastPos.lat, lng: lastPos.lng, acc: Math.round(window.lastAcc || 0) } : null;
+  const when = new Date();
+  const rua = await ruaDe(p);
+  const lines = [
+    'POSTE ' + p.code,
+    'Rua: ' + (rua || 'não encontrada'),
+    'Poste: ' + p.lat.toFixed(6) + ', ' + p.lng.toFixed(6),
+    gps ? 'GPS: ' + gps.lat.toFixed(6) + ', ' + gps.lng.toFixed(6) + ' (±' + gps.acc + ' m)' : 'GPS: indisponível',
+    when.toLocaleString('pt-BR')
+  ];
+  const fs = Math.max(14, Math.round(Math.min(W, H) / 26));
+  x.font = 'bold ' + fs + 'px sans-serif';
+  const pad = fs * 0.6, lh = fs * 1.3;
+  const w = Math.max(...lines.map(l => x.measureText(l).width)) + pad * 2;
+  const h = lines.length * lh + pad;
+  x.fillStyle = 'rgba(0,0,0,.6)'; x.fillRect(0, H - h, w, h);
+  x.fillStyle = '#fff'; x.textBaseline = 'top';
+  lines.forEach((l, i) => x.fillText(l, pad, H - h + pad / 2 + i * lh));
+  const blob = await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.85));
+  return { blob, gps, when, rua };
+}
+
+const camIn = document.getElementById('cam');
+camIn.onchange = async () => {
+  const f = camIn.files[0], p = camPt; camIn.value = '';
+  if (!f || !p) return;
+  const msg = document.getElementById('msg');
+  try {
+    msg.style.color = '#555'; msg.textContent = 'Salvando foto...';
+    const r = await carimbar(f, p);
+    await fotoAdd({ pid: p.id, n: p.n, code: p.code, lat: p.lat, lng: p.lng, gps: r.gps, rua: r.rua, time: r.when.toISOString(), blob: r.blob });
+    const c = await fotoCount(p.id);
+    msg.style.color = '#1a9b4b';
+    msg.textContent = 'Foto salva · poste ' + p.code + ': ' + c + (r.gps ? '' : ' (sem GPS)');
+  } catch (e) { msg.style.color = '#b00'; msg.textContent = 'Erro ao salvar foto'; }
+};
+
+document.getElementById('expf').onclick = async () => {
+  const msg = document.getElementById('msg');
+  try {
+    const all = await fotosAll();
+    if (!all.length) { msg.style.color = '#b00'; msg.textContent = 'Nenhuma foto'; return; }
+    msg.style.color = '#555'; msg.textContent = 'Gerando ZIP...';
+    const zip = new JSZip(), cnt = {};
+    let csv = 'arquivo;poste;rua;lat_poste;lng_poste;lat_gps;lng_gps;precisao_m;data_hora\n';
+    all.forEach(r => {
+      const base = String(r.code).replace(/[^\w-]+/g, '_');
+      cnt[base] = (cnt[base] || 0) + 1;
+      const name = 'POSTE-' + base + '_' + cnt[base] + '.jpg';
+      zip.file(name, r.blob);
+      csv += [name, r.code, (r.rua || '').replace(/;/g, ','), r.lat, r.lng, r.gps ? r.gps.lat : '', r.gps ? r.gps.lng : '',
+        r.gps ? r.gps.acc : '', new Date(r.time).toLocaleString('pt-BR')].join(';') + '\n';
+    });
+    zip.file('fotos.csv', '\ufeff' + csv);
+    const out = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(out);
+    a.download = 'fotos-' + new Date().toISOString().slice(0, 10) + '.zip';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    msg.style.color = '#1a9b4b'; msg.textContent = all.length + ' foto(s) exportada(s)';
+    if (confirm('ZIP gerado. Apagar as fotos do aparelho para liberar espaço?\n(Só confirme se o arquivo baixou direitinho.)')) {
+      await fotosClear(); msg.textContent = 'Fotos apagadas do aparelho';
+    }
+  } catch (e) { msg.style.color = '#b00'; msg.textContent = 'Erro ao exportar fotos'; }
+};
+
 const panel = document.getElementById('panel');
 document.getElementById('toggle').onclick = e => {
   panel.classList.toggle('min');
@@ -227,7 +342,7 @@ document.getElementById('toggle').onclick = e => {
 // Minha localização
 let meDot, meCircle, first = true, lastPos = null;
 map.on('locationfound', e => {
-  lastPos = e.latlng;
+  lastPos = e.latlng; window.lastAcc = e.accuracy;
   if (!meDot) {
     meCircle = L.circle(e.latlng, { radius: e.accuracy, color: '#1d6fe8', weight: 1, fillOpacity: .12 }).addTo(map);
     meDot = L.circleMarker(e.latlng, { radius: 8, color: '#fff', weight: 3, fillColor: '#1d6fe8', fillOpacity: 1 })
