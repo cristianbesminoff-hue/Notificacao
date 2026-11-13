@@ -24,6 +24,21 @@
   .pin{background:#e8501d;color:#fff;border:2px solid #fff;border-radius:50%;
     width:30px;height:30px;line-height:26px;text-align:center;font-weight:700;font-size:13px;
     box-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .pin.sel{background:#1d6fe8;width:34px;height:34px;line-height:30px;font-size:14px;z-index:900}
+  #sel{display:none;position:fixed;inset:0;z-index:3000;background:#fff;flex-direction:column;max-width:560px;margin:0 auto}
+  #sel.open{display:flex}
+  #sel header{padding:10px 12px;border-bottom:1px solid #ddd}
+  #sel header .top{display:flex;gap:6px}
+  #sq{flex:1;font-size:17px;padding:10px;border:1px solid #bbb;border-radius:8px;min-width:0}
+  #slist{flex:1;overflow:auto;padding:4px 12px}
+  .it{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #eee}
+  .it .c{font-size:20px;font-weight:700;min-width:70px}
+  .it .i{flex:1;font-size:12px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .it button{min-width:96px}
+  .it.on .c{color:#1d6fe8}
+  .it button.rem{background:#e5e7eb;color:#111}
+  #sel footer{padding:10px 12px;border-top:1px solid #ddd;display:flex;gap:6px;align-items:center}
+  #sel footer b{flex:1}
   .pop{text-align:center}
   .pop .cod{font-size:28px;font-weight:700;letter-spacing:3px;margin:2px 0 8px}
   .pop .cod.long{font-size:20px;letter-spacing:0;word-break:break-word}
@@ -43,6 +58,8 @@
   <p class="hint">Formato: latitude, longitude, código de 3 dígitos. Pode colar vários de uma vez.</p>
   <div class="row">
     <button id="add">Adicionar</button>
+    <button id="selb" style="background:#1d6fe8">🔍 Selecionar postes</button>
+    <button class="sec" id="only">Só selecionados: não</button>
     <button class="sec" id="me">📍 Eu</button>
     <button class="sec" id="fit">Ver todos</button>
     <button class="sec" id="exp">⬇ Exportar</button>
@@ -58,10 +75,26 @@
   <div class="row" style="margin-top:4px"><small id="count"></small></div>
 </div>
 
+<div id="sel">
+  <header>
+    <div class="top">
+      <input id="sq" type="search" inputmode="search" placeholder="Pesquisar poste (ex: 1840)" autocomplete="off">
+      <button class="sec" id="sclose">Fechar</button>
+    </div>
+    <p class="hint">Toque em Adicionar (ou Enter se só sobrar um) — o poste fica azul no mapa.</p>
+  </header>
+  <div id="slist"></div>
+  <footer>
+    <b id="scount"></b>
+    <button class="sec" id="sclear">Limpar</button>
+    <button id="sdone">Ver no mapa</button>
+  </footer>
+</div>
+
 <script>
 const KEY = 'mapa_pontos_v1';
-let state = { pts: [], next: 1 };
-try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.pts) state = s; } catch (e) {}
+let state = { pts: [], next: 1, sel: [] };
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.pts) state = s; if (!Array.isArray(state.sel)) state.sel = []; } catch (e) {}
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
 
 const map = L.map('map', { zoomControl: false }).setView([-14.2, -51.9], 4);
@@ -73,16 +106,36 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 const markers = {};           // id -> marker
 const route = L.polyline([], { color: '#1d6fe8', weight: 4, opacity: .8 }).addTo(map);
 
+let onlySel = false;
+const isSel = id => state.sel.includes(id);
 function updateRoute(){
-  route.setLatLngs(state.pts.map(p => [p.lat, p.lng]));
+  const vis = onlySel ? state.pts.filter(p => isSel(p.id)) : state.pts;
+  route.setLatLngs(vis.map(p => [p.lat, p.lng]));
   document.getElementById('count').textContent =
-    state.pts.length + ' ponto(s) no mapa';
+    state.pts.length + ' ponto(s) no mapa · ' + state.sel.length + ' selecionado(s)';
+}
+function pinIcon(p){
+  return L.divIcon({ className: '', html: '<div class="pin' + (isSel(p.id) ? ' sel' : '') + '">' + p.n + '</div>',
+    iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] });
+}
+function applyView(){
+  state.pts.forEach(p => {
+    const m = markers[p.id]; if (!m) return;
+    m.setIcon(pinIcon(p));
+    m.setZIndexOffset(isSel(p.id) ? 1000 : 0);
+    const show = !onlySel || isSel(p.id);
+    if (show && !map.hasLayer(m)) m.addTo(map);
+    if (!show && map.hasLayer(m)) map.removeLayer(m);
+  });
+  updateRoute();
+  document.getElementById('only').textContent = 'Só selecionados: ' + (onlySel ? 'sim' : 'não');
+  document.getElementById('only').style.background = onlySel ? '#1d6fe8' : '';
+  document.getElementById('only').style.color = onlySel ? '#fff' : '';
 }
 
 function makeMarker(p){
-  const icon = L.divIcon({ className: '', html: '<div class="pin">' + p.n + '</div>',
-    iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] });
-  const m = L.marker([p.lat, p.lng], { icon }).addTo(map);
+  const m = L.marker([p.lat, p.lng], { icon: pinIcon(p), zIndexOffset: isSel(p.id) ? 1000 : 0 });
+  if (!onlySel || isSel(p.id)) m.addTo(map);
   const box = document.createElement('div');
   box.className = 'pop';
   const t = document.createElement('div'); t.textContent = 'Ponto ' + p.n;
@@ -117,7 +170,8 @@ function makeMarker(p){
 function executar(id){
   if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; }
   state.pts = state.pts.filter(p => p.id !== id);
-  save(); updateRoute();
+  state.sel = state.sel.filter(x => x !== id);
+  save(); updateRoute(); renderSel();
 }
 
 function addPoints(text){
@@ -140,8 +194,59 @@ function addPoints(text){
 }
 
 function fitAll(){
-  if (state.pts.length) map.fitBounds(state.pts.map(p => [p.lat, p.lng]), { padding: [50, 50], maxZoom: 16 });
+  const v = onlySel ? state.pts.filter(p => isSel(p.id)) : state.pts;
+  if (v.length) map.fitBounds(v.map(p => [p.lat, p.lng]), { padding: [50, 50], maxZoom: 16 });
 }
+
+// ===== Seleção de postes =====
+const selEl = document.getElementById('sel'), sq = document.getElementById('sq'), slist = document.getElementById('slist');
+function matches(){
+  const q = sq.value.trim().toLowerCase();
+  return state.pts.filter(p => !q || String(p.code).toLowerCase().includes(q)
+    || (p.info || '').toLowerCase().includes(q) || String(p.n) === q);
+}
+function toggleSel(id){
+  state.sel = isSel(id) ? state.sel.filter(x => x !== id) : state.sel.concat(id);
+  save(); applyView(); renderSel();
+}
+function renderSel(){
+  const list = matches();
+  slist.innerHTML = '';
+  list.slice(0, 100).forEach(p => {
+    const on = isSel(p.id);
+    const row = document.createElement('div'); row.className = 'it' + (on ? ' on' : '');
+    const c = document.createElement('div'); c.className = 'c'; c.textContent = p.code;
+    const i = document.createElement('div'); i.className = 'i'; i.textContent = (p.info || '') || ('Ponto ' + p.n);
+    const b = document.createElement('button');
+    b.textContent = on ? '✔ Remover' : 'Adicionar'; b.className = on ? 'rem' : '';
+    b.onclick = () => toggleSel(p.id);
+    row.append(c, i, b); slist.appendChild(row);
+  });
+  if (!list.length) slist.innerHTML = '<p class="hint" style="padding:12px">Nenhum poste encontrado.</p>';
+  else if (list.length > 100) { const m = document.createElement('p'); m.className = 'hint'; m.textContent = 'Mostrando 100 de ' + list.length + '. Continue digitando para filtrar.'; slist.appendChild(m); }
+  document.getElementById('scount').textContent = state.sel.length + ' selecionado(s)';
+}
+document.getElementById('selb').onclick = () => { selEl.classList.add('open'); renderSel(); sq.focus(); };
+const closeSel = () => selEl.classList.remove('open');
+document.getElementById('sclose').onclick = closeSel;
+document.getElementById('sdone').onclick = () => {
+  closeSel();
+  const v = state.pts.filter(p => isSel(p.id));
+  if (v.length) map.fitBounds(v.map(p => [p.lat, p.lng]), { padding: [50, 50], maxZoom: 17 });
+};
+sq.oninput = renderSel;
+sq.onkeydown = e => {
+  if (e.key !== 'Enter') return;
+  const l = matches();
+  const exact = l.filter(p => String(p.code) === sq.value.trim());
+  const pick = exact.length === 1 ? exact[0] : (l.length === 1 ? l[0] : null);
+  if (pick) { if (!isSel(pick.id)) toggleSel(pick.id); sq.value = ''; renderSel(); }
+};
+document.getElementById('sclear').onclick = () => {
+  if (!state.sel.length || !confirm('Limpar a seleção?')) return;
+  state.sel = []; save(); applyView(); renderSel();
+};
+document.getElementById('only').onclick = () => { onlySel = !onlySel; applyView(); fitAll(); };
 
 // carregar salvos
 state.pts.forEach(makeMarker); updateRoute(); fitAll();
@@ -177,7 +282,7 @@ fileIn.onchange = () => {
         state.pts.push(p); makeMarker(p); have.add(p.id); n++;
       });
       state.next = Math.max(state.next, data.next || 1, ...state.pts.map(p => p.n + 1));
-      save(); updateRoute(); fitAll();
+      save(); updateRoute(); renderSel(); fitAll();
       msg.style.color = '#1a9b4b'; msg.textContent = n + ' ponto(s) importado(s)';
     } catch (e) { msg.style.color = '#b00'; msg.textContent = 'Arquivo inválido'; }
     fileIn.value = '';
@@ -219,7 +324,7 @@ kmlIn.onchange = async () => {
       const p = { id: Date.now() + '_' + state.next, n: state.next++, lat, lng, code, info };
       state.pts.push(p); makeMarker(p); n++;
     });
-    save(); updateRoute(); fitAll();
+    save(); updateRoute(); renderSel(); fitAll();
     msg.style.color = n ? '#1a9b4b' : '#b00';
     msg.textContent = n ? n + ' ponto(s) importado(s)' : 'Nenhum ponto encontrado';
   } catch (e) { msg.style.color = '#b00'; msg.textContent = 'Arquivo inválido'; }
@@ -316,44 +421,4 @@ document.getElementById('expf').onclick = async () => {
       cnt[base] = (cnt[base] || 0) + 1;
       const name = 'POSTE-' + base + '_' + cnt[base] + '.jpg';
       zip.file(name, r.blob);
-      csv += [name, r.code, (r.rua || '').replace(/;/g, ','), r.lat, r.lng, r.gps ? r.gps.lat : '', r.gps ? r.gps.lng : '',
-        r.gps ? r.gps.acc : '', new Date(r.time).toLocaleString('pt-BR')].join(';') + '\n';
-    });
-    zip.file('fotos.csv', '\ufeff' + csv);
-    const out = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(out);
-    a.download = 'fotos-' + new Date().toISOString().slice(0, 10) + '.zip';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    msg.style.color = '#1a9b4b'; msg.textContent = all.length + ' foto(s) exportada(s)';
-    if (confirm('ZIP gerado. Apagar as fotos do aparelho para liberar espaço?\n(Só confirme se o arquivo baixou direitinho.)')) {
-      await fotosClear(); msg.textContent = 'Fotos apagadas do aparelho';
-    }
-  } catch (e) { msg.style.color = '#b00'; msg.textContent = 'Erro ao exportar fotos'; }
-};
-
-const panel = document.getElementById('panel');
-document.getElementById('toggle').onclick = e => {
-  panel.classList.toggle('min');
-  e.target.textContent = panel.classList.contains('min') ? '▲' : '▼';
-};
-
-// Minha localização
-let meDot, meCircle, first = true, lastPos = null;
-map.on('locationfound', e => {
-  lastPos = e.latlng; window.lastAcc = e.accuracy;
-  if (!meDot) {
-    meCircle = L.circle(e.latlng, { radius: e.accuracy, color: '#1d6fe8', weight: 1, fillOpacity: .12 }).addTo(map);
-    meDot = L.circleMarker(e.latlng, { radius: 8, color: '#fff', weight: 3, fillColor: '#1d6fe8', fillOpacity: 1 })
-      .addTo(map).bindTooltip('Você está aqui');
-  } else { meDot.setLatLng(e.latlng); meCircle.setLatLng(e.latlng).setRadius(e.accuracy); }
-  if (first && !state.pts.length) map.setView(e.latlng, 16);
-  first = false;
-});
-map.on('locationerror', () => { document.getElementById('msg').textContent = 'Sem permissão de GPS'; });
-map.locate({ watch: true, enableHighAccuracy: true });
-document.getElementById('me').onclick = () => { if (lastPos) map.setView(lastPos, 17); else map.locate({ watch: true, enableHighAccuracy: true }); };
-</script>
-</body>
-</html>
+      csv += [n
